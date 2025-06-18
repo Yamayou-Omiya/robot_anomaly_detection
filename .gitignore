@@ -1,0 +1,11 @@
+# 仮想環境フォルダ
+.venv/
+venv/
+
+# Pythonのキャッシュファイル
+__pycache__/
+*.pyc
+
+# データファイル
+data/
+*.npy
