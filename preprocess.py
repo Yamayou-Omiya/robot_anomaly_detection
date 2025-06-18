@@ -6,7 +6,7 @@ from tqdm import tqdm # 進捗バーを表示するためにtqdmをインポー�
 # --- 設定項目 ---
 # これらの値は、PCのスペックや動画の内容に応じて調整します。
 IMG_SIZE = 128         # 画像のサイズ（高さと幅）
-SEQUENCE_LENGTH = 30   # 1つのデータとする動画のフレーム数（シーケンス長）
+SEQUENCE_LENGTH = 150   # 1つのデータとする動画のフレーム数（シーケンス長）
 
 # 入力と出力のパス
 TRAIN_DATA_DIR = './data/train'
