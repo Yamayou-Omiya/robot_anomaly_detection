@@ -16,81 +16,76 @@ MODEL_DIR = 'models'
 MODEL_PATH = os.path.join(MODEL_DIR, 'autoencoder_model.keras')
 
 # 学習のハイパーパラメータ
-EPOCHS = 20  # データセットを何周学習させるか
-BATCH_SIZE = 4 # 一度に何個のデータを見て学習するか (PCのメモリに応じて調整)
+EPOCHS = 20
+BATCH_SIZE = 4
 
 # ==============================================================================
 # モデル構築
 # ==============================================================================
 def build_convlstm_autoencoder(input_shape):
-    """ConvLSTM Autoencoderモデルを構築する関数"""
-    # エンコーダ（入力データを圧縮していく部分）
-    encoder = models.Sequential([
-        layers.Input(shape=input_shape),
-        layers.ConvLSTM2D(filters=64, kernel_size=(3, 3), padding='same', return_sequences=True, activation='relu'),
-        layers.BatchNormalization(),
-        layers.ConvLSTM2D(filters=32, kernel_size=(3, 3), padding='same', return_sequences=False, activation='relu'),
-        layers.BatchNormalization()
-    ], name="encoder")
+    """
+    ConvLSTM Autoencoderモデルを構築する関数 (最終完成版)
+    input_shape: (シーケンス長, 高さ, 幅, チャンネル数) e.g. (150, 128, 128, 1)
+    """
+    inputs = layers.Input(shape=input_shape)
 
-    # デコーダ（圧縮されたデータから元に戻していく部分）
-    decoder = models.Sequential([
-        layers.Input(shape=encoder.output_shape[1:]),
-        layers.Conv3D(filters=32, kernel_size=(3, 3, 3), padding='same', activation='relu'),
-        layers.UpSampling3D(size=(2, 2, 2)), # 3Dでアップサンプリング
-        layers.Conv3D(filters=64, kernel_size=(3, 3, 3), padding='same', activation='relu'),
-        layers.UpSampling3D(size=(2, 2, 2)),
-        layers.Conv3D(filters=1, kernel_size=(3, 3, 3), padding='same', activation='sigmoid')
-    ], name="decoder")
-    
-    # 実際にはエンコーダとデコーダの接続が複雑なため、Functional APIでモデルを構築
-    # この部分は少し複雑ですが、定型的な書き方として捉えてください。
-    input_seq = layers.Input(shape=input_shape)
-    encoded_seq = encoder(input_seq)
-    
-    # デコーダが3Dの入力を期待するので、時間軸を拡張
-    encoded_seq_expanded = layers.Reshape(target_shape=(1,)+encoder.output_shape[1:])(encoded_seq)
-    # デコーダに合うようにリピート
-    repeated_vector = layers.RepeatVector(input_shape[0])(encoded_seq)
+    # --- エンコーダ (圧縮) ---
+    x = layers.ConvLSTM2D(filters=64, kernel_size=(3, 3), padding='same', return_sequences=True, activation='relu')(inputs)
+    x = layers.BatchNormalization()(x)
+    x = layers.ConvLSTM2D(filters=32, kernel_size=(3, 3), padding='same', return_sequences=True, activation='relu')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.ConvLSTM2D(filters=16, kernel_size=(3, 3), padding='same', return_sequences=False, activation='relu')(x)
 
-    # 再構築したデコーダ部分
-    x = layers.ConvLSTM2D(filters=32, kernel_size=(3, 3), padding="same", return_sequences=True, activation="relu")(repeated_vector)
+    # --- 潜在表現をシーケンスに戻す処理 ---
+    latent_vector = layers.Flatten()(x)
+    x = layers.RepeatVector(input_shape[0])(latent_vector)
+    x = layers.Reshape((input_shape[0], input_shape[1], input_shape[2], 16))(x)
+
+    # --- デコーダ (復元) ---
+    x = layers.ConvLSTM2D(filters=32, kernel_size=(3, 3), padding='same', return_sequences=True, activation='relu')(x)
     x = layers.BatchNormalization()(x)
-    x = layers.ConvLSTM2D(filters=64, kernel_size=(3, 3), padding="same", return_sequences=True, activation="relu")(x)
+    x = layers.ConvLSTM2D(filters=64, kernel_size=(3, 3), padding='same', return_sequences=True, activation='relu')(x)
     x = layers.BatchNormalization()(x)
-    decoded_seq = layers.Conv3D(filters=1, kernel_size=(3, 3, 3), activation="sigmoid", padding="same")(x)
     
-    autoencoder = models.Model(input_seq, decoded_seq)
+    # === ここが今回の修正点です ===
+    # 3次元のカーネルサイズ (3, 3, 3) を正しく指定します
+    outputs = layers.Conv3D(filters=1, kernel_size=(3, 3, 3), activation='sigmoid', padding='same')(x)
+
+    autoencoder = models.Model(inputs, outputs)
     return autoencoder
 
 # ==============================================================================
 # メイン処理
 # ==============================================================================
 if __name__ == '__main__':
+    # GPUを強制的に無効化する設定（環境問題の切り分けのため）
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
     # --- 1. データの読み込み ---
     print("Loading datasets...")
+    if not os.path.exists(TRAIN_DATASET_PATH) or not os.path.exists(VAL_DATASET_PATH):
+        print("Error: Dataset files not found. Please run preprocess.py first.")
+        exit()
     x_train = np.load(TRAIN_DATASET_PATH)
     x_val = np.load(VAL_DATASET_PATH)
     print(f"Training data shape: {x_train.shape}")
     print(f"Validation data shape: {x_val.shape}")
     
     # --- 2. モデルの構築 ---
-    # 入力データの形状を取得 (サンプル数を除く)
     input_shape = x_train.shape[1:]
     model = build_convlstm_autoencoder(input_shape)
-    
-    # モデルのコンパイル（学習方法の設定）
-    model.compile(optimizer='adam', loss='mse') # mse: 平均二乗誤差
+    model.compile(optimizer='adam', loss='mse')
     model.summary()
 
     # --- 3. モデルの学習 ---
     print("\nStarting training...")
     history = model.fit(
         x_train,
-        x_train, # オートエンコーダなので、入力と出力が同じ
+        x_train,
         epochs=EPOCHS,
         batch_size=BATCH_SIZE,
-        validation_data=(x_val, x_val), # 検証データも入力と出力が同じ
+        validation_data=(x_val, x_val),
         callbacks=[
             tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, mode='min')
         ]
